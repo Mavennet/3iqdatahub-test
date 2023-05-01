@@ -235,9 +235,9 @@ public class Application {
 							String valDateStr = lineData.get(valDateColumn);
 							try{
 								if(valDateStr != null && valDateStr.trim().length() > 0){
-									comparedItems = comparedItems + 1;
 									LocalDate valDate = LocalDate.parse(lineData.get(valDateColumn));
 									if(dte == null || valDate.isEqual(dte) || valDate.isAfter(dte)){
+										comparedItems = comparedItems + 1;
 										if(scriptData != manualData && manualData != 0){
 											sheetResult.add(String.format("%s | %s | %s | %s <> %s", sheetName, columnName, valDate, scriptData, manualData));
 										}
