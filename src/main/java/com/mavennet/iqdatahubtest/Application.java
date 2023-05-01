@@ -16,13 +16,14 @@ import java.net.URL;
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
 import java.time.LocalDate;
+import java.time.format.DateTimeParseException;
 import java.util.*;
 
 @SpringBootApplication
 @RestController
 public class Application {
 
-	private String fileURL = "https://docs.google.com/spreadsheets/d/1LMrx_9P5umJTk7YEFAHnJ0UB1Bv-oYtE-Q8tJLIVySQ/export?format=xlsx";
+	private final String fileURL = "https://docs.google.com/spreadsheets/d/1LMrx_9P5umJTk7YEFAHnJ0UB1Bv-oYtE-Q8tJLIVySQ/export?format=xlsx";
 	//private String fileURL = "https://docs.google.com/spreadsheets/d/15VYDPk4GAknpYh65476yfQjhTn8qsCt05arZXL7aM58/export?format=xlsx";
 
 	private final List<String> compareColumns = Arrays.asList(
@@ -34,7 +35,7 @@ public class Application {
 			"Mngt Fee",
 			"Ops Exp",
 			"HST",
-			"Waiver = Waiver/Blended HST", //TODO - Replace
+			"Waiver",
 			"OPENING EQUITY",
 			"Contributions",
 			"Redemptions",
@@ -100,22 +101,54 @@ public class Application {
 
 			String sheetName =  sheet.getSheetName().replaceAll("[^\\x00-\\x7F]", "").trim();
 			Map<Integer, List<String>> sheetData = new HashMap<>();
+			List<String> headers = new ArrayList<>();
 			int i = 0;
 			for (Row row : sheet) {
 				List<String> rowData = new ArrayList<>();
-				for (Cell cell : row) {
-					switch (cell.getCellType()) {
-						case STRING: rowData.add(cell.getStringCellValue()); break;
-						case NUMERIC:
-							if(DateUtil.isCellDateFormatted(cell)){
-								rowData.add(dateFormat.format(cell.getDateCellValue())); break;
-							}else{
-								rowData.add(String.format("%.2f", cell.getNumericCellValue())); break;
+				if(i == 0){
+					for (Cell cell : row) {
+						switch (cell.getCellType()) {
+							case STRING -> {
+								String cellValue = cell.getStringCellValue();
+								if(cellValue.equals("Waiver/Blended HST")){
+									rowData.add("Waiver");
+								}else{
+									rowData.add(cellValue);
+								}
 							}
-
-						default: rowData.add("");
+							case NUMERIC -> {
+								if (DateUtil.isCellDateFormatted(cell)) {
+									rowData.add(dateFormat.format(cell.getDateCellValue()));
+								} else {
+									rowData.add(String.format("%.2f", cell.getNumericCellValue()));
+								}
+							}
+							default -> rowData.add("");
+						}
+					}
+					headers.addAll(rowData);
+				}else{
+					// Need to treat blank values in a special way as per https://poi.apache.org/components/spreadsheet/quick-guide.html#Iterator
+					for(int colIndex=0; colIndex < headers.size(); colIndex++){
+						Cell cell = row.getCell(colIndex, Row.MissingCellPolicy.RETURN_BLANK_AS_NULL);
+						if (cell == null) {
+							rowData.add("");
+						} else {
+							switch (cell.getCellType()) {
+								case STRING -> rowData.add(cell.getStringCellValue());
+								case NUMERIC -> {
+									if (DateUtil.isCellDateFormatted(cell)) {
+										rowData.add(dateFormat.format(cell.getDateCellValue()));
+									} else {
+										rowData.add(String.format("%.2f", cell.getNumericCellValue()));
+									}
+								}
+								default -> rowData.add("");
+							}
+						}
 					}
 				}
+
 				sheetData.put(i++, rowData);
 			}
 
@@ -128,7 +161,7 @@ public class Application {
 	@GetMapping(value= {"/compareData/{dte}", "/compareData"})
 	public Map<String, ComparisonResult> compareData(@PathVariable(required = false) LocalDate dte) throws Exception {
 
-		Map<String, ComparisonResult> result = new HashMap();
+		Map<String, ComparisonResult> result = new HashMap<>();
 
 		File file = File.createTempFile("Data", ".xlsx");
 		System.out.println("Getting the file..");
@@ -193,18 +226,25 @@ public class Application {
 							}
 
 							int valDateColumn;
-							if(sheetName.equals("NAV ETHQ USD comparision")){
+							if(sheetName.equals(" NAV BTCQ USD comparision")){
 								valDateColumn = 1;
 							}else{
 								valDateColumn = 0;
 							}
-							String valDate = lineData.get(valDateColumn);
 
-							if(dte == null || dte.toString().equals(valDate)){
-								comparedItems = comparedItems + 1;
-								if(scriptData != manualData && manualData != 0){
-									sheetResult.add(String.format("%s | %s | %s | %s <> %s", sheetName, columnName, valDate, scriptData, manualData));
+							String valDateStr = lineData.get(valDateColumn);
+							try{
+								if(valDateStr != null && valDateStr.trim().length() > 0){
+									comparedItems = comparedItems + 1;
+									LocalDate valDate = LocalDate.parse(lineData.get(valDateColumn));
+									if(dte == null || valDate.isEqual(dte) || valDate.isAfter(dte)){
+										if(scriptData != manualData && manualData != 0){
+											sheetResult.add(String.format("%s | %s | %s | %s <> %s", sheetName, columnName, valDate, scriptData, manualData));
+										}
+									}
 								}
+							}catch(DateTimeParseException e){
+								System.err.printf("Error parsing date %s\n", valDateStr);
 							}
 						}
 					}
@@ -213,7 +253,7 @@ public class Application {
 
 			if(comparedItems != 0){
 				result.put(sheetName, new ComparisonResult(String.format ("%.2f%%", (1 - ((float) sheetResult.size() / (float) comparedItems))*100), sheetResult));
-				System.out.println(String.format("Compared sheet %s , %d mistmatches found", sheetName, sheetResult.size()));
+				System.out.printf("Compared sheet %s , %d mistmatches found%n\n", sheetName, sheetResult.size());
 			}
 		}
 
